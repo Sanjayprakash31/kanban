@@ -7,10 +7,11 @@
 // API Configuration & State
 // =============================================================================
 // Dynamically determine the backend API base URL
-const API_BASE = window.__API_URL__ || (
+// Allows storing a custom API URL (e.g. for Vercel -> backend connection) in localStorage
+let API_BASE = localStorage.getItem('kanban_api_url') || window.__API_URL__ || (
   window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
     ? `http://${window.location.hostname}:8000`
-    : `${window.location.protocol}//${window.location.hostname}:8000`
+    : 'http://localhost:8000'
 );
 
 let allTasks = [];
@@ -81,6 +82,17 @@ function setupEventListeners() {
   btnCancelModal.addEventListener('click', closeModal);
   taskModal.addEventListener('click', (e) => {
     if (e.target === taskModal) closeModal();
+  });
+
+  // Allow clicking connection status indicator to change/view backend API URL
+  connectionStatus.style.cursor = 'pointer';
+  connectionStatus.title = `Backend: ${API_BASE} (Click to configure)`;
+  connectionStatus.addEventListener('click', () => {
+    const newUrl = prompt('Enter Backend API URL (e.g., http://localhost:8000 or your remote backend URL):', API_BASE);
+    if (newUrl !== null && newUrl.trim() !== '') {
+      localStorage.setItem('kanban_api_url', newUrl.trim().replace(/\/+$/, ''));
+      window.location.reload();
+    }
   });
 
   document.addEventListener('keydown', (e) => {
