@@ -136,9 +136,28 @@ function setupEventListeners() {
   setupDragAndDropColumns();
 }
 
-// =============================================================================
-// Backend API Integration
-// =============================================================================
+// Default initial demo tasks for offline / Vercel preview
+const DEFAULT_TASKS = [
+  { id: 1, title: 'Configure PostgreSQL Database', description: 'Design tasks table schema with id, title, status, position, created_at', status: 'To Do', position: 0, created_at: new Date().toISOString() },
+  { id: 2, title: 'Build CI/CD Pipeline', description: 'Automate Docker builds and health checks with GitHub Actions', status: 'In Progress', position: 1, created_at: new Date().toISOString() },
+  { id: 3, title: 'Deploy with Ansible', description: 'Run deployment playbook with staging and production variable files', status: 'Done', position: 2, created_at: new Date().toISOString() },
+];
+
+function loadLocalTasks() {
+  const saved = localStorage.getItem('kanban_local_tasks');
+  if (saved) {
+    try {
+      allTasks = JSON.parse(saved);
+      return;
+    } catch (_) {}
+  }
+  allTasks = [...DEFAULT_TASKS];
+  saveLocalTasks();
+}
+
+function saveLocalTasks() {
+  localStorage.setItem('kanban_local_tasks', JSON.stringify(allTasks));
+}
 
 /**
  * Check backend connection health status
@@ -154,12 +173,12 @@ async function checkBackendHealth() {
     }
   } catch (err) {
     connectionStatus.className = 'status-indicator error';
-    statusLabel.textContent = 'API Offline';
+    statusLabel.textContent = 'Demo Mode (Offline)';
   }
 }
 
 /**
- * Fetch all tasks from GET /tasks
+ * Fetch all tasks from GET /tasks (with automatic local fallback)
  */
 async function fetchTasks() {
   try {
@@ -170,13 +189,19 @@ async function fetchTasks() {
     allTasks = await response.json();
     renderTasks();
   } catch (error) {
-    console.error('Error fetching tasks:', error);
-    showToast(`Could not load tasks from ${API_BASE}. Ensure backend is running.`, 'error');
+    console.warn('Backend API unreachable. Falling back to local board storage:', error);
+    loadLocalTasks();
+    renderTasks();
+    if (window.location.protocol === 'https:' && API_BASE.startsWith('http://')) {
+      showToast('Operating in Demo Mode on Vercel. For live PostgreSQL, use http://localhost:3000 locally.', 'info');
+    } else {
+      showToast('Loaded in Demo Mode. Connect your backend anytime to sync with PostgreSQL.', 'info');
+    }
   }
 }
 
 /**
- * Create a new task via POST /tasks
+ * Create a new task via POST /tasks (with local fallback)
  */
 async function createTask(payload) {
   try {
@@ -186,23 +211,32 @@ async function createTask(payload) {
       body: JSON.stringify(payload),
     });
 
-    if (!response.ok) {
-      const err = await response.json();
-      throw new Error(err.detail || 'Failed to create task');
+    if (response.ok) {
+      const newTask = await response.json();
+      allTasks.push(newTask);
+      renderTasks();
+      showToast(`Task "${newTask.title}" created successfully!`, 'success');
+      closeModal();
+      return;
     }
-
-    const newTask = await response.json();
-    allTasks.push(newTask);
-    renderTasks();
-    showToast(`Task "${newTask.title}" created successfully!`, 'success');
-    closeModal();
+    throw new Error('API create failed');
   } catch (error) {
-    console.error('Error creating task:', error);
-    if (window.location.protocol === 'https:' && API_BASE.startsWith('http://')) {
-      showToast('Browser blocked http:// request from https:// Vercel (Mixed Content). Open http://localhost:3000 locally or set an HTTPS backend URL.', 'error');
-    } else {
-      showToast(`Cannot reach backend at ${API_BASE}. Ensure Docker is running.`, 'error');
-    }
+    // Local fallback
+    const newId = allTasks.length > 0 ? Math.max(...allTasks.map(t => t.id)) + 1 : 1;
+    const localTask = {
+      id: newId,
+      title: payload.title,
+      description: payload.description || null,
+      status: payload.status || 'To Do',
+      position: payload.position || 0,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    allTasks.push(localTask);
+    saveLocalTasks();
+    renderTasks();
+    closeModal();
+    showToast(`Task "${localTask.title}" created (Demo Mode)!`, 'success');
   }
 }
 
@@ -217,57 +251,55 @@ async function updateTask(taskId, payload) {
       body: JSON.stringify(payload),
     });
 
-    if (!response.ok) {
-      const err = await response.json();
-      throw new Error(err.detail || 'Failed to update task');
+    if (response.ok) {
+      const updatedTask = await response.json();
+      const index = allTasks.findIndex((t) => t.id === taskId);
+      if (index !== -1) allTasks[index] = updatedTask;
+      renderTasks();
+      showToast(`Task updated successfully!`, 'success');
+      closeModal();
+      return;
     }
-
-    const updatedTask = await response.json();
+    throw new Error('API update failed');
+  } catch (error) {
     const index = allTasks.findIndex((t) => t.id === taskId);
     if (index !== -1) {
-      allTasks[index] = updatedTask;
+      allTasks[index] = { ...allTasks[index], ...payload, updated_at: new Date().toISOString() };
+      saveLocalTasks();
+      renderTasks();
     }
-    renderTasks();
-    showToast(`Task updated successfully!`, 'success');
     closeModal();
-  } catch (error) {
-    console.error('Error updating task:', error);
-    showToast(error.message, 'error');
+    showToast(`Task updated (Demo Mode)!`, 'success');
   }
 }
 
 /**
  * Move status via PATCH /tasks/{task_id} on drop / quick action
- * Specifically implements Build Step 3: calls PATCH /tasks/{id} on drop
  */
 async function moveTaskStatus(taskId, newStatus) {
-  try {
-    const currentTask = allTasks.find((t) => t.id === taskId);
-    if (!currentTask) return;
+  const index = allTasks.findIndex((t) => t.id === taskId);
+  if (index === -1) return;
 
-    // Call PATCH /tasks/{id} on drop to persist status in PostgreSQL
+  try {
     const response = await fetch(`${API_BASE}/tasks/${taskId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        status: newStatus,
-      }),
+      body: JSON.stringify({ status: newStatus }),
     });
 
-    if (!response.ok) {
-      throw new Error(`Failed to update status`);
-    }
-
-    const updated = await response.json();
-    const index = allTasks.findIndex((t) => t.id === taskId);
-    if (index !== -1) {
+    if (response.ok) {
+      const updated = await response.json();
       allTasks[index] = updated;
+      renderTasks();
+      showToast(`Moved task to "${newStatus}"`, 'info');
+      return;
     }
-    renderTasks();
-    showToast(`Moved task to "${newStatus}"`, 'info');
+    throw new Error('API patch failed');
   } catch (error) {
-    console.error('Error moving task status:', error);
-    showToast('Failed to move task status', 'error');
+    allTasks[index].status = newStatus;
+    saveLocalTasks();
+    renderTasks();
+    showToast(`Moved to "${newStatus}" (Demo Mode)`, 'info');
   }
 }
 
@@ -284,16 +316,18 @@ async function deleteTask(taskId, taskTitle) {
       method: 'DELETE',
     });
 
-    if (!response.ok) {
-      throw new Error('Failed to delete task');
+    if (response.ok) {
+      allTasks = allTasks.filter((t) => t.id !== taskId);
+      renderTasks();
+      showToast(`Task "${taskTitle}" deleted.`, 'info');
+      return;
     }
-
-    allTasks = allTasks.filter((t) => t.id !== taskId);
-    renderTasks();
-    showToast(`Task "${taskTitle}" deleted.`, 'info');
+    throw new Error('API delete failed');
   } catch (error) {
-    console.error('Error deleting task:', error);
-    showToast('Failed to delete task', 'error');
+    allTasks = allTasks.filter((t) => t.id !== taskId);
+    saveLocalTasks();
+    renderTasks();
+    showToast(`Task "${taskTitle}" deleted (Demo Mode).`, 'info');
   }
 }
 
