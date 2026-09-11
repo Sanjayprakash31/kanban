@@ -58,14 +58,33 @@ const btnQuickDone = document.getElementById('btn-quick-done');
 // =============================================================================
 // Initialization
 // =============================================================================
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   setupEventListeners();
+  await loadRemoteConfig();
   checkBackendHealth();
   fetchTasks();
 
   // Periodic health check every 15 seconds
   setInterval(checkBackendHealth, 15000);
 });
+
+async function loadRemoteConfig() {
+  // If no user manual override is stored in localStorage, check Vercel /api/config
+  if (!localStorage.getItem('kanban_api_url')) {
+    try {
+      const res = await fetch('/api/config');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.apiUrl) {
+          API_BASE = data.apiUrl.replace(/\/+$/, '');
+          console.log('Loaded backend API URL from Vercel environment:', API_BASE);
+        }
+      }
+    } catch (_) {
+      // Ignore if /api/config is not present (e.g. static local server)
+    }
+  }
+}
 
 // =============================================================================
 // Event Listeners
