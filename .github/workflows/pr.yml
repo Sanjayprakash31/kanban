@@ -1,0 +1,97 @@
+name: CI Pipeline
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-and-verify:
+    name: Build Docker Application & Verify API
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate Docker Compose Configuration
+        run: docker compose config
+
+      - name: Build and Start Application Stack
+        run: docker compose up --build -d
+
+      - name: Wait for Backend Health Check
+        run: |
+          echo "Waiting for backend service to become healthy..."
+          MAX_RETRIES=30
+          COUNT=0
+          until curl -sSf http://localhost:8000/health > /dev/null 2>&1; do
+            COUNT=$((COUNT+1))
+            if [ $COUNT -ge $MAX_RETRIES ]; then
+              echo "Timeout reached waiting for backend to become healthy."
+              docker compose logs
+              exit 1
+            fi
+            echo "Waiting for backend... ($COUNT/$MAX_RETRIES)"
+            sleep 2
+          done
+          echo "Backend is live and responding!"
+
+      - name: Verify Backend Health Endpoint (/health)
+        run: |
+          HEALTH_RES=$(curl -sSf http://localhost:8000/health)
+          echo "Health Response: $HEALTH_RES"
+          echo "$HEALTH_RES" | grep -q '"status":"healthy"'
+
+      - name: Verify Backend Tasks API Endpoints (/tasks)
+        run: |
+          echo "1. Verify initial tasks list (GET /tasks)"
+          curl -sSf http://localhost:8000/tasks | grep -q '\['
+
+          echo "2. Create a test task (POST /tasks)"
+          CREATE_RES=$(curl -sSf -X POST http://localhost:8000/tasks \
+            -H "Content-Type: application/json" \
+            -d '{"title": "CI Automated Task", "description": "Created during GitHub Actions CI run", "status": "To Do"}')
+          echo "Created Task: $CREATE_RES"
+          TASK_ID=$(echo "$CREATE_RES" | jq -r '.id')
+          if [ -z "$TASK_ID" ] || [ "$TASK_ID" = "null" ]; then
+            echo "Failed to extract valid TASK_ID."
+            exit 1
+          fi
+          echo "Created Task ID: $TASK_ID"
+
+          echo "3. Update task status (PUT /tasks/$TASK_ID)"
+          UPDATE_RES=$(curl -sSf -X PUT "http://localhost:8000/tasks/$TASK_ID" \
+            -H "Content-Type: application/json" \
+            -d '{"title": "CI Automated Task (Updated)", "status": "In Progress"}')
+          echo "Updated Task: $UPDATE_RES"
+          echo "$UPDATE_RES" | grep -q '"status":"In Progress"'
+
+          echo "4. Verify updated task in list (GET /tasks)"
+          curl -sSf http://localhost:8000/tasks | grep -q "CI Automated Task (Updated)"
+
+          echo "5. Delete task (DELETE /tasks/$TASK_ID)"
+          DELETE_RES=$(curl -sSf -X DELETE "http://localhost:8000/tasks/$TASK_ID")
+          echo "Delete Response: $DELETE_RES"
+          echo "$DELETE_RES" | grep -q "deleted successfully"
+
+      - name: Verify Frontend Web Service
+        run: |
+          echo "Verifying frontend container responds on port 3000..."
+          curl -sSf -I http://localhost:3000 | grep -q "200 OK"
+
+      - name: Dump Logs on Failure
+        if: failure()
+        run: |
+          echo "=== Container Logs on Failure ==="
+          docker compose logs
+
+      - name: Tear Down Containers
+        if: always()
+        run: docker compose down -v
