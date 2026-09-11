@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from typing import List, Optional
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 # Support running as a package or as a standalone script inside the backend directory
@@ -12,7 +13,6 @@ try:
         TaskCreate,
         TaskResponse,
         TaskStatus,
-        TaskStatusUpdate,
         TaskUpdate,
     )
 except ImportError:
@@ -22,7 +22,6 @@ except ImportError:
         TaskCreate,
         TaskResponse,
         TaskStatus,
-        TaskStatusUpdate,
         TaskUpdate,
     )
 
@@ -34,13 +33,17 @@ except ImportError:
 async def lifespan(app: FastAPI):
     """
     Runs on application startup.
-    Attempts to initialize database tables automatically if connection succeeds.
+    Initializes database tables and ensures required columns (e.g. position) exist.
     """
     try:
         Base.metadata.create_all(bind=engine)
-        print("Database tables verified/created successfully.")
+        # Ensure position column exists in existing tables (Build Step 1 schema migration)
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS position INTEGER DEFAULT 0 NOT NULL;"))
+            conn.commit()
+        print("Database tables verified/migrated successfully.")
     except Exception as exc:
-        print(f"Notice: Could not auto-create tables on startup (PostgreSQL may be starting up): {exc}")
+        print(f"Notice: Database initialization notice: {exc}")
     yield
 
 
@@ -49,7 +52,7 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------
 app = FastAPI(
     title="Task Board (Kanban) API",
-    description="REST API for the DevOps Kanban Task Board application backed by PostgreSQL.",
+    description="DevOps Kanban Board REST API backed by PostgreSQL. Implements GET, POST, PATCH, and DELETE on /tasks.",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -57,12 +60,11 @@ app = FastAPI(
 # ---------------------------------------------------------
 # CORS Configuration
 # ---------------------------------------------------------
-# Allows the frontend (running on a different port/host) to communicate with this backend API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins for development and demo purposes
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows GET, POST, PUT, PATCH, DELETE, OPTIONS
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -72,9 +74,7 @@ app.add_middleware(
 # =========================================================
 @app.get("/", tags=["General"])
 def read_root():
-    """
-    Root welcome endpoint with pointers to interactive API docs.
-    """
+    """Root welcome endpoint with pointers to interactive API docs."""
     return {
         "message": "Welcome to the Task Board (Kanban) API!",
         "docs_url": "/docs",
@@ -84,14 +84,12 @@ def read_root():
 
 @app.get("/health", tags=["General"])
 def health_check():
-    """
-    Health check endpoint used by Docker, load balancers, and monitoring.
-    """
+    """Health check endpoint used by Docker, load balancers, and monitoring."""
     return {"status": "healthy"}
 
 
 # =========================================================
-# Kanban Task Endpoints (CRUD + Column Movement)
+# Required Endpoints: GET, POST, PATCH, DELETE /tasks
 # =========================================================
 @app.get("/tasks", response_model=List[TaskResponse], tags=["Tasks"])
 def list_tasks(
@@ -103,25 +101,26 @@ def list_tasks(
     db: Session = Depends(get_db)
 ):
     """
-    List all tasks.
-    Optionally filter by column status: '?status=To Do', '?status=In Progress', or '?status=Done'.
+    List all tasks ordered by status and position.
+    Can optionally filter by column status: '?status=To Do', '?status=In Progress', or '?status=Done'.
     """
     query = db.query(Task)
     if status_filter:
         query = query.filter(Task.status == status_filter.value)
-    return query.order_by(Task.id.asc()).all()
+    return query.order_by(Task.position.asc(), Task.id.asc()).all()
 
 
 @app.post("/tasks", response_model=TaskResponse, status_code=status.HTTP_201_CREATED, tags=["Tasks"])
 def create_task(task_in: TaskCreate, db: Session = Depends(get_db)):
     """
     Create a new task on the Kanban board.
-    Default status is 'To Do' if none is specified.
+    Defaults: status='To Do', position=0.
     """
     new_task = Task(
         title=task_in.title,
         description=task_in.description,
         status=task_in.status.value if task_in.status else TaskStatus.TODO.value,
+        position=task_in.position if task_in.position is not None else 0,
     )
     db.add(new_task)
     db.commit()
@@ -129,25 +128,11 @@ def create_task(task_in: TaskCreate, db: Session = Depends(get_db)):
     return new_task
 
 
-@app.get("/tasks/{task_id}", response_model=TaskResponse, tags=["Tasks"])
-def get_task(task_id: int, db: Session = Depends(get_db)):
+@app.patch("/tasks/{task_id}", response_model=TaskResponse, tags=["Tasks"])
+def patch_task(task_id: int, task_in: TaskUpdate, db: Session = Depends(get_db)):
     """
-    Retrieve details of a specific task by its ID.
-    """
-    task = db.query(Task).filter(Task.id == task_id).first()
-    if not task:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Task with ID {task_id} not found."
-        )
-    return task
-
-
-@app.put("/tasks/{task_id}", response_model=TaskResponse, tags=["Tasks"])
-def update_task(task_id: int, task_in: TaskUpdate, db: Session = Depends(get_db)):
-    """
-    Update an existing task's title, description, or status.
-    Only provided fields will be updated.
+    Partially update a task (e.g. status or position when dragged across columns).
+    Specifically required by Build Step 2 & Step 3.
     """
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task:
@@ -162,29 +147,20 @@ def update_task(task_id: int, task_in: TaskUpdate, db: Session = Depends(get_db)
         task.description = task_in.description
     if task_in.status is not None:
         task.status = task_in.status.value
+    if task_in.position is not None:
+        task.position = task_in.position
 
     db.commit()
     db.refresh(task)
     return task
 
 
-@app.patch("/tasks/{task_id}/status", response_model=TaskResponse, tags=["Tasks"])
-def update_task_status(task_id: int, status_in: TaskStatusUpdate, db: Session = Depends(get_db)):
+@app.put("/tasks/{task_id}", response_model=TaskResponse, tags=["Tasks"])
+def update_task(task_id: int, task_in: TaskUpdate, db: Session = Depends(get_db)):
     """
-    Move a task between Kanban columns ('To Do' -> 'In Progress' -> 'Done').
-    Specifically optimized for drag-and-drop or status quick-change actions.
+    Full or partial update of an existing task (supports title, description, status, position).
     """
-    task = db.query(Task).filter(Task.id == task_id).first()
-    if not task:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Task with ID {task_id} not found."
-        )
-
-    task.status = status_in.status.value
-    db.commit()
-    db.refresh(task)
-    return task
+    return patch_task(task_id, task_in, db)
 
 
 @app.delete("/tasks/{task_id}", status_code=status.HTTP_200_OK, tags=["Tasks"])

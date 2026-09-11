@@ -1,0 +1,20 @@
+# =========================================================
+# Ansible Variables: Production Environment
+# =========================================================
+app_env: production
+app_dir: /opt/kanban-board
+
+# PostgreSQL Database Configuration (Production - Isolated credentials)
+db_name: kanban_db_prod
+db_user: kanban_user_prod
+db_password: prod_db_password_9900_ultra_secure
+db_port: 5432
+
+# Port Mappings
+backend_port: 8000
+frontend_port: 80
+
+# Container identifiers
+db_container: kanban_db_prod
+backend_container: kanban_backend_prod
+frontend_container: kanban_frontend_prod

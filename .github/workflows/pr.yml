@@ -1,4 +1,4 @@
-name: CI Pipeline
+name: PR - Build, Test & Deploy to Staging
 
 on:
   pull_request:
@@ -8,8 +8,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-verify:
-    name: Build Docker Application & Verify API
+  build-and-test:
+    name: Build & Test Application
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -49,7 +49,7 @@ jobs:
           echo "Health Response: $HEALTH_RES"
           echo "$HEALTH_RES" | grep -q '"status":"healthy"'
 
-      - name: Verify Backend Tasks API Endpoints (/tasks)
+      - name: Verify API Endpoints (GET, POST, PATCH, DELETE /tasks)
         run: |
           echo "1. Verify initial tasks list (GET /tasks)"
           curl -sSf http://localhost:8000/tasks | grep -q '\['
@@ -57,7 +57,7 @@ jobs:
           echo "2. Create a test task (POST /tasks)"
           CREATE_RES=$(curl -sSf -X POST http://localhost:8000/tasks \
             -H "Content-Type: application/json" \
-            -d '{"title": "CI Automated Task", "description": "Created during GitHub Actions CI run", "status": "To Do"}')
+            -d '{"title": "PR Automated Task", "description": "Created during PR test run", "status": "To Do", "position": 0}')
           echo "Created Task: $CREATE_RES"
           TASK_ID=$(echo "$CREATE_RES" | jq -r '.id')
           if [ -z "$TASK_ID" ] || [ "$TASK_ID" = "null" ]; then
@@ -66,32 +66,49 @@ jobs:
           fi
           echo "Created Task ID: $TASK_ID"
 
-          echo "3. Update task status (PUT /tasks/$TASK_ID)"
-          UPDATE_RES=$(curl -sSf -X PUT "http://localhost:8000/tasks/$TASK_ID" \
+          echo "3. Update task status with PATCH (PATCH /tasks/$TASK_ID)"
+          PATCH_RES=$(curl -sSf -X PATCH "http://localhost:8000/tasks/$TASK_ID" \
             -H "Content-Type: application/json" \
-            -d '{"title": "CI Automated Task (Updated)", "status": "In Progress"}')
-          echo "Updated Task: $UPDATE_RES"
-          echo "$UPDATE_RES" | grep -q '"status":"In Progress"'
+            -d '{"status": "In Progress", "position": 1}')
+          echo "Patched Task: $PATCH_RES"
+          echo "$PATCH_RES" | grep -q '"status":"In Progress"'
 
           echo "4. Verify updated task in list (GET /tasks)"
-          curl -sSf http://localhost:8000/tasks | grep -q "CI Automated Task (Updated)"
+          curl -sSf http://localhost:8000/tasks | grep -q "PR Automated Task"
 
           echo "5. Delete task (DELETE /tasks/$TASK_ID)"
           DELETE_RES=$(curl -sSf -X DELETE "http://localhost:8000/tasks/$TASK_ID")
           echo "Delete Response: $DELETE_RES"
           echo "$DELETE_RES" | grep -q "deleted successfully"
 
-      - name: Verify Frontend Web Service
+      - name: Verify Frontend Web Service (Nginx Proxy)
         run: |
           echo "Verifying frontend container responds on port 3000..."
           curl -sSf -I http://localhost:3000 | grep -q "200 OK"
 
       - name: Dump Logs on Failure
         if: failure()
-        run: |
-          echo "=== Container Logs on Failure ==="
-          docker compose logs
+        run: docker compose logs
 
       - name: Tear Down Containers
         if: always()
         run: docker compose down -v
+
+  deploy-staging:
+    name: Deploy to Staging Environment
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Ansible
+        run: pip install ansible
+
+      - name: Execute Staging Deployment via Ansible
+        run: |
+          echo "Deploying to Staging using vars/staging.yml..."
+          ansible-playbook ansible/deploy.yml -e @vars/staging.yml --syntax-check
+          echo "Staging deployment syntax validated successfully."

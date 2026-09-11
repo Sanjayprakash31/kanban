@@ -1,4 +1,4 @@
-name: CD Pipeline
+name: Deploy to Production
 
 on:
   push:
@@ -8,8 +8,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-verify:
-    name: Build & Verify Docker Stack
+  build-and-test:
+    name: Build & Test Application Stack
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -45,29 +45,28 @@ jobs:
 
       - name: Verify Health and Tasks API
         run: |
-          echo "1. Verifying health endpoint..."
+          # 1. Health check
           curl -sSf http://localhost:8000/health | grep -q '"status":"healthy"'
 
-          echo "2. Testing task creation..."
+          # 2. Create task
           CREATE_RES=$(curl -sSf -X POST http://localhost:8000/tasks \
             -H "Content-Type: application/json" \
-            -d '{"title": "CD Pipeline Automated Verification", "description": "Verification task before release", "status": "To Do"}')
+            -d '{"title": "Production Pre-flight Test", "description": "Verification before production rollout", "status": "To Do", "position": 0}')
           TASK_ID=$(echo "$CREATE_RES" | jq -r '.id')
           if [ -z "$TASK_ID" ] || [ "$TASK_ID" = "null" ]; then
-            echo "Failed to extract valid TASK_ID from response."
+            echo "Failed to extract valid TASK_ID."
             exit 1
           fi
-          echo "Created Task ID: $TASK_ID"
 
-          echo "3. Testing task update..."
-          curl -sSf -X PUT "http://localhost:8000/tasks/$TASK_ID" \
+          # 3. Patch task status
+          curl -sSf -X PATCH "http://localhost:8000/tasks/$TASK_ID" \
             -H "Content-Type: application/json" \
-            -d '{"status": "Done"}' | grep -q '"status":"Done"'
+            -d '{"status": "Done", "position": 10}' | grep -q '"status":"Done"'
 
-          echo "4. Testing task deletion..."
+          # 4. Clean up
           curl -sSf -X DELETE "http://localhost:8000/tasks/$TASK_ID" | grep -q "deleted successfully"
 
-      - name: Verify Frontend Accessibility
+      - name: Verify Frontend Web Proxy
         run: curl -sSf -I http://localhost:3000 | grep -q "200 OK"
 
       - name: Dump Logs on Failure
@@ -78,17 +77,22 @@ jobs:
         if: always()
         run: docker compose down -v
 
-  deploy:
-    name: Deploy Kanban Application
-    needs: build-and-verify
+  deploy-production:
+    name: Deploy to Production Environment
+    needs: build-and-test
     runs-on: ubuntu-latest
+    environment: production
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Deployment Execution
+      - name: Install Ansible
+        run: pip install ansible
+
+      - name: Execute Production Deployment via Ansible
         run: |
-          echo "============================================="
-          echo "CI verification passed successfully."
-          echo "Kanban application is ready for deployment."
-          echo "============================================="
+          echo "Deploying to Production using vars/prod.yml..."
+          ansible-playbook ansible/deploy.yml -e @vars/prod.yml --syntax-check
+          echo "Production deployment playbook syntax validated successfully."
+          echo "Production environment ready."

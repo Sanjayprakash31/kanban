@@ -8,10 +8,13 @@
 // =============================================================================
 // Dynamically determine the backend API base URL
 // Allows storing a custom API URL (e.g. for Vercel -> backend connection) in localStorage
+// If accessed via Nginx (port 3000), use /api reverse proxy for zero CORS issues
 let API_BASE = localStorage.getItem('kanban_api_url') || window.__API_URL__ || (
-  window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-    ? `http://${window.location.hostname}:8000`
-    : 'http://localhost:8000'
+  window.location.port === '3000'
+    ? '/api'
+    : (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+        ? 'http://localhost:8000'
+        : 'http://localhost:8000')
 );
 
 let allTasks = [];
@@ -234,20 +237,19 @@ async function updateTask(taskId, payload) {
 }
 
 /**
- * Quick status move via PUT /tasks/{task_id}
+ * Move status via PATCH /tasks/{task_id} on drop / quick action
+ * Specifically implements Build Step 3: calls PATCH /tasks/{id} on drop
  */
 async function moveTaskStatus(taskId, newStatus) {
   try {
     const currentTask = allTasks.find((t) => t.id === taskId);
     if (!currentTask) return;
 
-    // Use PUT /tasks/{task_id} to update status
+    // Call PATCH /tasks/{id} on drop to persist status in PostgreSQL
     const response = await fetch(`${API_BASE}/tasks/${taskId}`, {
-      method: 'PUT',
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        title: currentTask.title,
-        description: currentTask.description,
         status: newStatus,
       }),
     });

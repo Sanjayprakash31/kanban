@@ -1,0 +1,20 @@
+# =========================================================
+# Ansible Variables: Staging Environment
+# =========================================================
+app_env: staging
+app_dir: /opt/kanban-board
+
+# PostgreSQL Database Configuration (Staging Environment)
+db_name: kanban_db_staging
+db_user: kanban_user_staging
+db_password: staging_db_password_7788_secure
+db_port: 5432
+
+# Port Mappings
+backend_port: 8000
+frontend_port: 3000
+
+# Container identifiers
+db_container: kanban_db_staging
+backend_container: kanban_backend_staging
+frontend_container: kanban_frontend_staging

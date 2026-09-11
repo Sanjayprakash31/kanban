@@ -1,0 +1,53 @@
+---
+# =========================================================
+# Ansible Playbook: Deploy Task Board (Kanban) Application
+# Run with:
+#   ansible-playbook ansible/deploy.yml -e @vars/staging.yml
+#   ansible-playbook ansible/deploy.yml -e @vars/prod.yml
+# =========================================================
+- name: Deploy Task Board (Kanban) Application
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Ensure target environment variables are loaded
+      ansible.builtin.assert:
+        that:
+          - app_env is defined
+          - db_name is defined
+          - db_user is defined
+          - db_password is defined
+        fail_msg: "Please provide environment variable file: -e @vars/staging.yml or -e @vars/prod.yml"
+
+    - name: Display deployment configuration
+      ansible.builtin.debug:
+        msg: "Target Environment: {{ app_env }} | Database: {{ db_name }} (user: {{ db_user }})"
+
+    - name: Ensure project directory exists
+      ansible.builtin.file:
+        path: "{{ app_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Write environment configuration (.env)
+      ansible.builtin.copy:
+        dest: "{{ app_dir }}/.env"
+        mode: '0600'
+        content: |
+          POSTGRES_DB={{ db_name }}
+          POSTGRES_USER={{ db_user }}
+          POSTGRES_PASSWORD={{ db_password }}
+          DATABASE_URL=postgresql://{{ db_user }}:{{ db_password }}@db:{{ db_port }}/{{ db_name }}
+          APP_ENV={{ app_env }}
+
+    - name: Deploy application containers via Docker Compose
+      ansible.builtin.command:
+        cmd: docker compose up -d --build
+        chdir: "{{ app_dir }}"
+      register: deploy_result
+      changed_when: "'Created' in deploy_result.stdout or 'Starting' in deploy_result.stdout or 'Running' in deploy_result.stdout"
+
+    - name: Report deployment outcome
+      ansible.builtin.debug:
+        msg: "Successfully deployed Task Board to '{{ app_env }}' environment!"

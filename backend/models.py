@@ -17,7 +17,7 @@ except ImportError:
 class TaskStatus(str, Enum):
     """
     Allowed Kanban board status values.
-    Tasks can transition between: 'To Do', 'In Progress', and 'Done'.
+    Tasks transition between: 'To Do', 'In Progress', and 'Done'.
     """
     TODO = "To Do"
     IN_PROGRESS = "In Progress"
@@ -25,11 +25,13 @@ class TaskStatus(str, Enum):
 
 
 # =========================================================
-# SQLAlchemy Database Model (PostgreSQL 'tasks' table)
+# SQLAlchemy Database Model
+# Schema: tasks(id, title, status, position, created_at)
 # =========================================================
 class Task(Base):
     """
     Database table representation for tasks stored in PostgreSQL.
+    Matches schema: tasks(id, title, status, position, created_at)
     """
     __tablename__ = "tasks"
 
@@ -37,6 +39,7 @@ class Task(Base):
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     status = Column(String(50), default=TaskStatus.TODO.value, nullable=False)
+    position = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -45,15 +48,19 @@ class Task(Base):
 # Pydantic Schemas (Request Validation & Serialization)
 # =========================================================
 class TaskBase(BaseModel):
-    """Base schema with common attributes."""
+    """Base schema with common task attributes."""
     title: str
     description: Optional[str] = None
     status: Optional[TaskStatus] = TaskStatus.TODO
+    position: Optional[int] = 0
 
 
-class TaskCreate(TaskBase):
-    """Schema for creating a new task. Title is required."""
-    pass
+class TaskCreate(BaseModel):
+    """Schema for creating a new task."""
+    title: str
+    description: Optional[str] = None
+    status: Optional[TaskStatus] = TaskStatus.TODO
+    position: Optional[int] = 0
 
 
 class TaskUpdate(BaseModel):
@@ -61,19 +68,16 @@ class TaskUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     status: Optional[TaskStatus] = None
-
-
-class TaskStatusUpdate(BaseModel):
-    """Dedicated schema for moving tasks between Kanban columns."""
-    status: TaskStatus
+    position: Optional[int] = None
 
 
 class TaskResponse(BaseModel):
-    """Schema for returning task information to the client."""
+    """Schema returned to clients representing a task."""
     id: int
     title: str
     description: Optional[str] = None
     status: str
+    position: int
     created_at: datetime
     updated_at: datetime
 

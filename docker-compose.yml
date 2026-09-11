@@ -21,7 +21,7 @@ services:
       retries: 5
 
   # =========================================================
-  # FastAPI Backend Service
+  # FastAPI Backend Service (Waits for Postgres to be healthy)
   # =========================================================
   backend:
     build:
@@ -43,7 +43,7 @@ services:
         condition: service_healthy
 
   # =========================================================
-  # Frontend Web Service (Nginx)
+  # Frontend Web Service (Nginx Proxy to /api)
   # =========================================================
   frontend:
     image: nginx:alpine
@@ -53,6 +53,7 @@ services:
       - "3000:80"
     volumes:
       - ./frontend:/usr/share/nginx/html:ro
+      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - backend
 
