@@ -176,7 +176,11 @@ async function createTask(payload) {
     closeModal();
   } catch (error) {
     console.error('Error creating task:', error);
-    showToast(error.message, 'error');
+    if (window.location.protocol === 'https:' && API_BASE.startsWith('http://')) {
+      showToast('Browser blocked http:// request from https:// Vercel (Mixed Content). Open http://localhost:3000 locally or set an HTTPS backend URL.', 'error');
+    } else {
+      showToast(`Cannot reach backend at ${API_BASE}. Ensure Docker is running.`, 'error');
+    }
   }
 }
 
